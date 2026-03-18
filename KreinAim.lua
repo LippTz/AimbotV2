@@ -21,22 +21,47 @@ local RGBHue = 0
 
 --// Settings
 local Settings = {
+    -- Skeleton
     SkeletonESP = false,
     SkeletonThickness = 2,
+    -- Box
     BoxESP = false,
+    -- Corner Box
+    CornerBoxESP = false,
+    CornerBoxLength = 6,
+    -- Tracer
     TracerESP = false,
     TracerThickness = 1,
     TracerOrigin = "Bottom",
+    -- Name ESP (dipisah)
     NameESP = false,
-    NameSize = 14,
+    NameSize = 10,
+    HealthTextESP = false,
+    HealthTextSize = 10,
+    DistanceESP = false,
+    DistanceSize = 10,
+    -- Health Bar
     HealthBar = false,
+    -- General
     TeamCheck = false,
+    -- Aimbot
     AimbotEnabled = false,
     AimbotLockPart = "Head",
     AimbotSensitivity = 0,
     AimbotTeamCheck = false,
     AimbotAliveCheck = true,
     AimbotWallCheck = false,
+    AimbotPrediction = false,
+    AimbotPredictionStrength = 1.0,
+    AimbotHoldKey = false,
+    AimbotHoldKeyBind = "Q",
+    AimbotAutoShoot = false,
+    AimbotAutoShootDelay = 0.1,
+    -- Misc
+    Fullbright = false,
+    NoFog = false,
+    NoShadow = false,
+    -- FOV
     FOVEnabled = true,
     FOVVisible = true,
     FOVAmount = 90,
@@ -101,7 +126,8 @@ local function IsWallBetween(origin, targetPos, ignoreList)
     local distance = direction.Magnitude
     if distance <= 0 then return false end
     local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    -- Gunakan Exclude (pengganti Blacklist yang deprecated)
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = ignoreList
     rayParams.IgnoreWater = true
     local result = workspace:Raycast(origin, direction.Unit * (distance - 0.1), rayParams)
@@ -109,15 +135,50 @@ local function IsWallBetween(origin, targetPos, ignoreList)
 end
 
 --// =============================================
---// FOV CIRCLE (Drawing + GUI Fallback)
+--// VELOCITY PREDICTION HELPER
+--// =============================================
+-- Menyimpan posisi sebelumnya untuk hitung velocity tiap player
+local PrevPositions = {}
+
+local function GetPredictedPosition(player, part)
+    if not Settings.AimbotPrediction then
+        return part.Position
+    end
+
+    local now = tick()
+    local key = tostring(player.UserId)
+    local prev = PrevPositions[key]
+
+    if prev then
+        local dt = now - prev.time
+        if dt > 0 and dt < 0.2 then
+            -- Hitung velocity (stud/s) lalu project ke depan
+            local velocity = (part.Position - prev.pos) / dt
+            -- Strength mengontrol seberapa jauh prediksi
+            local predictedPos = part.Position + velocity * Settings.AimbotPredictionStrength
+            PrevPositions[key] = { pos = part.Position, time = now }
+            return predictedPos
+        end
+    end
+
+    PrevPositions[key] = { pos = part.Position, time = now }
+    return part.Position
+end
+
+-- Bersihkan data saat player pergi
+Players.PlayerRemoving:Connect(function(plr)
+    PrevPositions[tostring(plr.UserId)] = nil
+end)
+
+--// =============================================
+--// FOV CIRCLE (Drawing + GUI Fallback, keduanya aktif)
 --// =============================================
 local FOVDrawing = nil
 local FOVGui = nil
 local FOVFrame = nil
 local FOVStroke = nil
-local UseDrawingFOV = false
 
--- Try Drawing.new first
+-- Buat Drawing circle
 pcall(function()
     FOVDrawing = Drawing.new("Circle")
     FOVDrawing.Visible = false
@@ -128,10 +189,9 @@ pcall(function()
     FOVDrawing.Color = Color3.fromRGB(255, 255, 255)
     FOVDrawing.Transparency = 1
     FOVDrawing.Position = Vector2.new(0, 0)
-    UseDrawingFOV = true
 end)
 
--- Always create GUI fallback
+-- Selalu buat GUI fallback juga
 pcall(function()
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -160,10 +220,9 @@ pcall(function()
     FOVStroke.Parent = FOVFrame
 end)
 
-local function UpdateFOVCircle(visible, radius, thickness, color, locked)
+local function UpdateFOVCircle(visible, radius, thickness, color)
     local centerX, centerY = GetViewportCenter()
 
-    -- Update Drawing circle
     if FOVDrawing then
         pcall(function()
             FOVDrawing.Position = Vector2.new(centerX, centerY)
@@ -177,14 +236,12 @@ local function UpdateFOVCircle(visible, radius, thickness, color, locked)
         end)
     end
 
-    -- Update GUI circle
     if FOVFrame and FOVStroke then
         pcall(function()
             local diameter = radius * 2
             FOVFrame.Size = UDim2.fromOffset(diameter, diameter)
             FOVFrame.Position = UDim2.fromOffset(centerX, centerY)
             FOVFrame.Visible = visible
-
             FOVStroke.Thickness = thickness
             FOVStroke.Color = color
             FOVStroke.Transparency = visible and 0 or 1
@@ -206,9 +263,9 @@ local function DestroyFOV()
 end
 
 --// =============================================
---// RGB + FOV updater (always running)
+--// RGB + FOV UPDATER
 --// =============================================
-AimbotModule = {} -- Forward declare
+local AimbotModule = {}
 AimbotModule.Locked = nil
 AimbotModule.TweenAnim = nil
 
@@ -217,15 +274,11 @@ Connections["rgb"] = RunService.RenderStepped:Connect(function()
     RGBColor = Color3.fromHSV(RGBHue, 1, 1)
     Camera = workspace.CurrentCamera
 
-    -- FOV Circle
     if Settings.AimbotEnabled and Settings.FOVEnabled and Settings.FOVVisible then
-        local col = RGBColor
-        if AimbotModule.Locked then
-            col = Color3.fromRGB(255, 50, 50)
-        end
-        UpdateFOVCircle(true, Settings.FOVAmount, Settings.FOVThickness, col, AimbotModule.Locked)
+        local col = AimbotModule.Locked and Color3.fromRGB(255, 50, 50) or RGBColor
+        UpdateFOVCircle(true, Settings.FOVAmount, Settings.FOVThickness, col)
     else
-        UpdateFOVCircle(false, Settings.FOVAmount, Settings.FOVThickness, RGBColor, false)
+        UpdateFOVCircle(false, Settings.FOVAmount, Settings.FOVThickness, RGBColor)
     end
 end)
 
@@ -447,6 +500,120 @@ function BoxModule:Disable()
 end
 
 --// =============================================
+--// CORNER BOX ESP
+--// =============================================
+local CornerBoxModule = {}
+
+local function MakeCornerLines()
+    local lines = {}
+    for i = 1, 8 do
+        local l = Drawing.new("Line")
+        l.Visible = false
+        l.Thickness = 1
+        lines[i] = l
+    end
+    return lines
+end
+
+function CornerBoxModule:Enable()
+    if Connections["cornerbox"] then return end
+    Drawings["cornerbox"] = {}
+    Connections["cornerbox"] = {}
+
+    Connections["cornerbox"].render = RunService.RenderStepped:Connect(function()
+        if not Settings.CornerBoxESP then
+            for _, lines in pairs(Drawings["cornerbox"]) do
+                for _, l in ipairs(lines) do l.Visible = false end
+            end
+            return
+        end
+
+        local alive = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and IsAlive(plr) and IsEnemy(plr, Settings.TeamCheck) then
+                alive[plr] = true
+                local char = plr.Character
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local head = char:FindFirstChild("Head")
+
+                if not Drawings["cornerbox"][plr] then
+                    Drawings["cornerbox"][plr] = MakeCornerLines()
+                end
+                local L = Drawings["cornerbox"][plr]
+
+                if hrp and head then
+                    local top, topOn, topZ = WorldToScreen(head.Position + Vector3.new(0, 1, 0))
+                    local bot, botOn, botZ = WorldToScreen(hrp.Position - Vector3.new(0, 3, 0))
+
+                    if topOn and botOn and topZ > 0 and botZ > 0 then
+                        local h = math.abs(bot.Y - top.Y)
+                        local w = h / 1.8
+                        -- Pastikan minimum ukuran agar len tidak 0
+                        if h < 4 or w < 4 then
+                            for _, l in ipairs(L) do l.Visible = false end
+                        else
+                            local len = math.clamp(Settings.CornerBoxLength, 2, math.floor(math.min(w, h) / 2))
+                            local x0 = math.floor(top.X - w / 2)
+                            local y0 = math.floor(top.Y)
+                            local x1 = x0 + math.floor(w)
+                            local y1 = y0 + math.floor(h)
+
+                            -- Sudut TL
+                            L[1].From = Vector2.new(x0, y0); L[1].To = Vector2.new(x0 + len, y0)
+                            L[2].From = Vector2.new(x0, y0); L[2].To = Vector2.new(x0, y0 + len)
+                            -- Sudut TR
+                            L[3].From = Vector2.new(x1, y0); L[3].To = Vector2.new(x1 - len, y0)
+                            L[4].From = Vector2.new(x1, y0); L[4].To = Vector2.new(x1, y0 + len)
+                            -- Sudut BL
+                            L[5].From = Vector2.new(x0, y1); L[5].To = Vector2.new(x0 + len, y1)
+                            L[6].From = Vector2.new(x0, y1); L[6].To = Vector2.new(x0, y1 - len)
+                            -- Sudut BR
+                            L[7].From = Vector2.new(x1, y1); L[7].To = Vector2.new(x1 - len, y1)
+                            L[8].From = Vector2.new(x1, y1); L[8].To = Vector2.new(x1, y1 - len)
+
+                            for _, l in ipairs(L) do
+                                l.Color = RGBColor
+                                l.Thickness = 1
+                                l.Visible = true
+                            end
+                        end
+                    else
+                        for _, l in ipairs(L) do l.Visible = false end
+                    end
+                else
+                    for _, l in ipairs(L) do l.Visible = false end
+                end
+            end
+        end
+
+        for plr, lines in pairs(Drawings["cornerbox"]) do
+            if not alive[plr] then
+                for _, l in ipairs(lines) do l.Visible = false end
+            end
+        end
+    end)
+
+    Connections["cornerbox"].removing = Players.PlayerRemoving:Connect(function(plr)
+        if Drawings["cornerbox"] and Drawings["cornerbox"][plr] then
+            for _, l in ipairs(Drawings["cornerbox"][plr]) do
+                pcall(function() l:Remove() end)
+            end
+            Drawings["cornerbox"][plr] = nil
+        end
+    end)
+end
+
+function CornerBoxModule:Disable()
+    SafeDisconnect("cornerbox")
+    if Drawings["cornerbox"] then
+        for _, lines in pairs(Drawings["cornerbox"]) do
+            for _, l in ipairs(lines) do pcall(function() l:Remove() end) end
+        end
+        Drawings["cornerbox"] = nil
+    end
+end
+
+--// =============================================
 --// TRACER ESP
 --// =============================================
 local TracerModule = {}
@@ -516,7 +683,7 @@ function TracerModule:Disable()
 end
 
 --// =============================================
---// NAME ESP
+--// NAME ESP (hanya nama saja)
 --// =============================================
 local NameModule = {}
 
@@ -527,7 +694,154 @@ function NameModule:Enable()
 
     Connections["name"].render = RunService.RenderStepped:Connect(function()
         if not Settings.NameESP then
-            for _, d in pairs(Drawings["name"]) do d.text.Visible = false end
+            for _, d in pairs(Drawings["name"]) do d.Visible = false end
+            return
+        end
+        local alive = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and IsAlive(plr) and IsEnemy(plr, Settings.TeamCheck) then
+                alive[plr] = true
+                local char = plr.Character
+                local head = char:FindFirstChild("Head")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not Drawings["name"][plr] then
+                    local t = Drawing.new("Text")
+                    t.Visible = false
+                    t.Center = true
+                    t.Outline = true
+                    t.OutlineColor = Color3.new(0,0,0)
+                    t.Size = Settings.NameSize
+                    t.ZIndex = 5
+                    Drawings["name"][plr] = t
+                end
+                local t = Drawings["name"][plr]
+                if head and hrp then
+                    local screen, onScreen, depth = WorldToScreen(head.Position + Vector3.new(0, 2.4, 0))
+                    if onScreen and depth > 0 then
+                        t.Text = plr.DisplayName
+                        t.Position = screen
+                        t.Color = RGBColor
+                        t.Size = Settings.NameSize
+                        t.Visible = true
+                    else
+                        t.Visible = false
+                    end
+                else
+                    t.Visible = false
+                end
+            end
+        end
+        for plr, t in pairs(Drawings["name"]) do
+            if not alive[plr] then t.Visible = false end
+        end
+    end)
+
+    Connections["name"].removing = Players.PlayerRemoving:Connect(function(plr)
+        if Drawings["name"] and Drawings["name"][plr] then
+            pcall(function() Drawings["name"][plr]:Remove() end)
+            Drawings["name"][plr] = nil
+        end
+    end)
+end
+
+function NameModule:Disable()
+    SafeDisconnect("name")
+    if Drawings["name"] then
+        for _, t in pairs(Drawings["name"]) do pcall(function() t:Remove() end) end
+        Drawings["name"] = nil
+    end
+end
+
+--// =============================================
+--// HEALTH TEXT ESP (hanya teks HP)
+--// =============================================
+local HealthTextModule = {}
+
+function HealthTextModule:Enable()
+    if Connections["healthtext"] then return end
+    Drawings["healthtext"] = {}
+    Connections["healthtext"] = {}
+
+    Connections["healthtext"].render = RunService.RenderStepped:Connect(function()
+        if not Settings.HealthTextESP then
+            for _, t in pairs(Drawings["healthtext"]) do t.Visible = false end
+            return
+        end
+        local alive = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and IsAlive(plr) and IsEnemy(plr, Settings.TeamCheck) then
+                alive[plr] = true
+                local char = plr.Character
+                local head = char:FindFirstChild("Head")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if not Drawings["healthtext"][plr] then
+                    local t = Drawing.new("Text")
+                    t.Visible = false
+                    t.Center = true
+                    t.Outline = true
+                    t.OutlineColor = Color3.new(0,0,0)
+                    t.Size = Settings.HealthTextSize
+                    t.ZIndex = 5
+                    Drawings["healthtext"][plr] = t
+                end
+                local t = Drawings["healthtext"][plr]
+                if head and hrp and humanoid then
+                    -- Tampil di bawah nama (offset lebih ke bawah)
+                    local screen, onScreen, depth = WorldToScreen(head.Position + Vector3.new(0, 2.4, 0))
+                    if onScreen and depth > 0 then
+                        local hp = math.floor(humanoid.Health)
+                        local maxHp = math.floor(humanoid.MaxHealth)
+                        -- Warna berubah sesuai persentase HP
+                        local pct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                        local hpColor = Color3.fromRGB(255*(1-pct), 255*pct, 0)
+                        t.Text = "[" .. hp .. "/" .. maxHp .. " HP]"
+                        t.Position = Vector2.new(screen.X, screen.Y + Settings.HealthTextSize + 2)
+                        t.Color = hpColor
+                        t.Size = Settings.HealthTextSize
+                        t.Visible = true
+                    else
+                        t.Visible = false
+                    end
+                else
+                    t.Visible = false
+                end
+            end
+        end
+        for plr, t in pairs(Drawings["healthtext"]) do
+            if not alive[plr] then t.Visible = false end
+        end
+    end)
+
+    Connections["healthtext"].removing = Players.PlayerRemoving:Connect(function(plr)
+        if Drawings["healthtext"] and Drawings["healthtext"][plr] then
+            pcall(function() Drawings["healthtext"][plr]:Remove() end)
+            Drawings["healthtext"][plr] = nil
+        end
+    end)
+end
+
+function HealthTextModule:Disable()
+    SafeDisconnect("healthtext")
+    if Drawings["healthtext"] then
+        for _, t in pairs(Drawings["healthtext"]) do pcall(function() t:Remove() end) end
+        Drawings["healthtext"] = nil
+    end
+end
+
+--// =============================================
+--// DISTANCE ESP (hanya jarak)
+--// =============================================
+local DistanceModule = {}
+
+function DistanceModule:Enable()
+    if Connections["distance"] then return end
+    Drawings["distance"] = {}
+    Connections["distance"] = {}
+
+    Connections["distance"].render = RunService.RenderStepped:Connect(function()
+        if not Settings.DistanceESP then
+            for _, t in pairs(Drawings["distance"]) do t.Visible = false end
             return
         end
         local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -537,57 +851,57 @@ function NameModule:Enable()
                 alive[plr] = true
                 local char = plr.Character
                 local head = char:FindFirstChild("Head")
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
                 local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not Drawings["name"][plr] then
-                    local d = {}
-                    d.text = Drawing.new("Text")
-                    d.text.Visible = false
-                    d.text.Center = true
-                    d.text.Outline = true
-                    d.text.OutlineColor = Color3.new(0,0,0)
-                    d.text.Size = Settings.NameSize
-                    d.text.ZIndex = 5
-                    Drawings["name"][plr] = d
+                if not Drawings["distance"][plr] then
+                    local t = Drawing.new("Text")
+                    t.Visible = false
+                    t.Center = true
+                    t.Outline = true
+                    t.OutlineColor = Color3.new(0,0,0)
+                    t.Size = Settings.DistanceSize
+                    t.ZIndex = 5
+                    Drawings["distance"][plr] = t
                 end
-                local d = Drawings["name"][plr]
-                if head and humanoid and hrp then
-                    local screen, onScreen, depth = WorldToScreen(head.Position + Vector3.new(0,2,0))
+                local t = Drawings["distance"][plr]
+                if head and hrp then
+                    local screen, onScreen, depth = WorldToScreen(head.Position + Vector3.new(0, 2.4, 0))
                     if onScreen and depth > 0 then
                         local dist = myHRP and math.floor((myHRP.Position - hrp.Position).Magnitude) or 0
-                        local hp = math.floor(humanoid.Health)
-                        local maxHp = math.floor(humanoid.MaxHealth)
-                        d.text.Text = plr.DisplayName .. " [" .. dist .. "m] [" .. hp .. "/" .. maxHp .. " HP]"
-                        d.text.Position = screen
-                        d.text.Color = RGBColor
-                        d.text.Size = Settings.NameSize
-                        d.text.Visible = true
+                        -- Offset di bawah HP text (atau nama jika HP off)
+                        local offsetY = Settings.HealthTextESP
+                            and (Settings.HealthTextSize * 2 + 4)
+                            or (Settings.NameESP and Settings.NameSize + 2 or 0)
+                        t.Text = "[" .. dist .. "m]"
+                        t.Position = Vector2.new(screen.X, screen.Y + Settings.DistanceSize + offsetY)
+                        t.Color = Color3.fromRGB(180, 220, 255)
+                        t.Size = Settings.DistanceSize
+                        t.Visible = true
                     else
-                        d.text.Visible = false
+                        t.Visible = false
                     end
                 else
-                    d.text.Visible = false
+                    t.Visible = false
                 end
             end
         end
-        for plr, d in pairs(Drawings["name"]) do
-            if not alive[plr] then d.text.Visible = false end
+        for plr, t in pairs(Drawings["distance"]) do
+            if not alive[plr] then t.Visible = false end
         end
     end)
 
-    Connections["name"].removing = Players.PlayerRemoving:Connect(function(plr)
-        if Drawings["name"] and Drawings["name"][plr] then
-            pcall(function() Drawings["name"][plr].text:Remove() end)
-            Drawings["name"][plr] = nil
+    Connections["distance"].removing = Players.PlayerRemoving:Connect(function(plr)
+        if Drawings["distance"] and Drawings["distance"][plr] then
+            pcall(function() Drawings["distance"][plr]:Remove() end)
+            Drawings["distance"][plr] = nil
         end
     end)
 end
 
-function NameModule:Disable()
-    SafeDisconnect("name")
-    if Drawings["name"] then
-        for _, d in pairs(Drawings["name"]) do pcall(function() d.text:Remove() end) end
-        Drawings["name"] = nil
+function DistanceModule:Disable()
+    SafeDisconnect("distance")
+    if Drawings["distance"] then
+        for _, t in pairs(Drawings["distance"]) do pcall(function() t:Remove() end) end
+        Drawings["distance"] = nil
     end
 end
 
@@ -703,8 +1017,29 @@ function HealthBarModule:Disable()
 end
 
 --// =============================================
---// AIMBOT MODULE
+--// AIMBOT MODULE (dengan Velocity Prediction)
 --// =============================================
+-- State untuk Hold Key dan Auto Shoot
+local AimbotHoldActive = false
+local AutoShootLastTime = 0
+
+-- Mapping nama key ke KeyCode
+local KeyMap = {
+    Q = Enum.KeyCode.Q,
+    E = Enum.KeyCode.E,
+    R = Enum.KeyCode.R,
+    F = Enum.KeyCode.F,
+    Z = Enum.KeyCode.Z,
+    X = Enum.KeyCode.X,
+    C = Enum.KeyCode.C,
+    V = Enum.KeyCode.V,
+    G = Enum.KeyCode.G,
+    H = Enum.KeyCode.H,
+    LeftShift = Enum.KeyCode.LeftShift,
+    RightShift = Enum.KeyCode.RightShift,
+    LeftControl = Enum.KeyCode.LeftControl,
+    LeftAlt = Enum.KeyCode.LeftAlt,
+}
 function AimbotModule:CancelLock()
     self.Locked = nil
     if self.TweenAnim then
@@ -754,10 +1089,20 @@ function AimbotModule:Enable()
             return
         end
 
+        -- Hold Key check: jika mode hold aktif, cek apakah tombol sedang ditekan
+        if Settings.AimbotHoldKey then
+            local kc = KeyMap[Settings.AimbotHoldKeyBind]
+            local held = kc and UserInputService:IsKeyDown(kc) or false
+            if not held then
+                if self.Locked then self:CancelLock() end
+                return
+            end
+        end
+
         local cam = workspace.CurrentCamera
         if not cam then return end
 
-        -- Validate
+        -- Validasi target
         if self.Locked then
             local valid = true
             if not IsAlive(self.Locked) then valid = false end
@@ -794,18 +1139,42 @@ function AimbotModule:Enable()
             local char = self.Locked.Character
             local part = char and char:FindFirstChild(Settings.AimbotLockPart)
             if part then
+                local targetPos = GetPredictedPosition(self.Locked, part)
+
                 if Settings.AimbotSensitivity > 0 then
                     if self.TweenAnim then pcall(function() self.TweenAnim:Cancel() end) end
                     self.TweenAnim = TweenService:Create(
                         cam,
                         TweenInfo.new(Settings.AimbotSensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
-                        {CFrame = CFrame.new(cam.CFrame.Position, part.Position)}
+                        {CFrame = CFrame.new(cam.CFrame.Position, targetPos)}
                     )
                     self.TweenAnim:Play()
                 else
-                    cam.CFrame = CFrame.new(cam.CFrame.Position, part.Position)
+                    cam.CFrame = CFrame.new(cam.CFrame.Position, targetPos)
+                end
+
+                -- Auto Shoot: hanya jalan kalau:
+                -- 1. self.Locked ada (sudah dicek di atas)
+                -- 2. AimbotAutoShoot aktif
+                -- 3. Part target on-screen
+                -- 4. Aim sudah dekat ke target (< 15px dari tengah layar)
+                -- 5. Cooldown sudah lewat
+                if Settings.AimbotAutoShoot then
+                    local screenPos, onScreen = WorldToScreen(part.Position)
+                    if onScreen then
+                        local centerX, centerY = GetViewportCenter()
+                        local distToCenter = (Vector2.new(centerX, centerY) - screenPos).Magnitude
+                        local now = tick()
+                        if distToCenter < 15 and (now - AutoShootLastTime) >= Settings.AimbotAutoShootDelay then
+                            AutoShootLastTime = now
+                            pcall(function() mouse1click() end)
+                        end
+                    end
                 end
             end
+        else
+            -- Tidak ada target terkunci — pastikan auto shoot tidak jalan
+            AutoShootLastTime = tick()
         end
     end)
 end
@@ -813,6 +1182,53 @@ end
 function AimbotModule:Disable()
     self:CancelLock()
     SafeDisconnect("aimbot")
+end
+
+--// =============================================
+--// MISC MODULES
+--// =============================================
+
+-- Simpan nilai asli Lighting
+local OriginalLighting = {}
+
+local function SaveLighting()
+    local L = game:GetService("Lighting")
+    OriginalLighting.Brightness      = L.Brightness
+    OriginalLighting.Ambient         = L.Ambient
+    OriginalLighting.OutdoorAmbient  = L.OutdoorAmbient
+    OriginalLighting.FogEnd          = L.FogEnd
+    OriginalLighting.FogStart        = L.FogStart
+    OriginalLighting.GlobalShadows   = L.GlobalShadows
+end
+SaveLighting()
+
+local function SetFullbright(enabled)
+    local L = game:GetService("Lighting")
+    if enabled then
+        L.Brightness     = 2
+        L.Ambient        = Color3.fromRGB(178, 178, 178)
+        L.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+    else
+        L.Brightness     = OriginalLighting.Brightness
+        L.Ambient        = OriginalLighting.Ambient
+        L.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+    end
+end
+
+local function SetNoFog(enabled)
+    local L = game:GetService("Lighting")
+    if enabled then
+        L.FogEnd   = 1e6
+        L.FogStart = 1e6
+    else
+        L.FogEnd   = OriginalLighting.FogEnd
+        L.FogStart = OriginalLighting.FogStart
+    end
+end
+
+local function SetNoShadow(enabled)
+    local L = game:GetService("Lighting")
+    L.GlobalShadows = not enabled
 end
 
 --// =============================================
@@ -826,7 +1242,9 @@ local Window = Rayfield:CreateWindow({
     KeySystem = false,
 })
 
---// ESP TAB
+--// ========================
+--// ESP TAB — hanya toggle on/off
+--// ========================
 local ESPTab = Window:CreateTab("ESP", 4483362458)
 
 ESPTab:CreateSection("General")
@@ -835,21 +1253,7 @@ ESPTab:CreateToggle({
     Callback = function(v) Settings.TeamCheck = v end,
 })
 
-ESPTab:CreateSection("Skeleton")
-ToggleRefs.SkeletonESP = ESPTab:CreateToggle({
-    Name = "Skeleton ESP", CurrentValue = false, Flag = "SKEL_T",
-    Callback = function(v)
-        Settings.SkeletonESP = v
-        if v then SkeletonModule:Enable() else SkeletonModule:Disable() end
-    end,
-})
-ESPTab:CreateSlider({
-    Name = "Thickness", Range = {1,5}, Increment = 1, Suffix = "px",
-    CurrentValue = 2, Flag = "SKEL_TH",
-    Callback = function(v) Settings.SkeletonThickness = v end,
-})
-
-ESPTab:CreateSection("Box")
+ESPTab:CreateSection("Visual")
 ToggleRefs.BoxESP = ESPTab:CreateToggle({
     Name = "Box ESP", CurrentValue = false, Flag = "BOX_T",
     Callback = function(v)
@@ -857,8 +1261,20 @@ ToggleRefs.BoxESP = ESPTab:CreateToggle({
         if v then BoxModule:Enable() else BoxModule:Disable() end
     end,
 })
-
-ESPTab:CreateSection("Tracer")
+ToggleRefs.CornerBoxESP = ESPTab:CreateToggle({
+    Name = "Corner Box ESP", CurrentValue = false, Flag = "CBOX_T",
+    Callback = function(v)
+        Settings.CornerBoxESP = v
+        if v then CornerBoxModule:Enable() else CornerBoxModule:Disable() end
+    end,
+})
+ToggleRefs.SkeletonESP = ESPTab:CreateToggle({
+    Name = "Skeleton ESP", CurrentValue = false, Flag = "SKEL_T",
+    Callback = function(v)
+        Settings.SkeletonESP = v
+        if v then SkeletonModule:Enable() else SkeletonModule:Disable() end
+    end,
+})
 ToggleRefs.TracerESP = ESPTab:CreateToggle({
     Name = "Tracer ESP", CurrentValue = false, Flag = "TRAC_T",
     Callback = function(v)
@@ -866,34 +1282,6 @@ ToggleRefs.TracerESP = ESPTab:CreateToggle({
         if v then TracerModule:Enable() else TracerModule:Disable() end
     end,
 })
-ESPTab:CreateSlider({
-    Name = "Thickness", Range = {1,5}, Increment = 1, Suffix = "px",
-    CurrentValue = 1, Flag = "TRAC_TH",
-    Callback = function(v) Settings.TracerThickness = v end,
-})
-ESPTab:CreateDropdown({
-    Name = "Origin", Options = {"Bottom","Center","Top"},
-    CurrentOption = {"Bottom"}, Flag = "TRAC_OR",
-    Callback = function(v)
-        if typeof(v) == "table" then Settings.TracerOrigin = v[1] else Settings.TracerOrigin = v end
-    end,
-})
-
-ESPTab:CreateSection("Name + HP")
-ToggleRefs.NameESP = ESPTab:CreateToggle({
-    Name = "Name + Distance + HP", CurrentValue = false, Flag = "NAME_T",
-    Callback = function(v)
-        Settings.NameESP = v
-        if v then NameModule:Enable() else NameModule:Disable() end
-    end,
-})
-ESPTab:CreateSlider({
-    Name = "Text Size", Range = {8,24}, Increment = 1, Suffix = "px",
-    CurrentValue = 14, Flag = "NAME_SZ",
-    Callback = function(v) Settings.NameSize = v end,
-})
-
-ESPTab:CreateSection("Health Bar")
 ToggleRefs.HealthBar = ESPTab:CreateToggle({
     Name = "Health Bar", CurrentValue = false, Flag = "HP_T",
     Callback = function(v)
@@ -902,9 +1290,35 @@ ToggleRefs.HealthBar = ESPTab:CreateToggle({
     end,
 })
 
+ESPTab:CreateSection("Text")
+ToggleRefs.NameESP = ESPTab:CreateToggle({
+    Name = "Name ESP", CurrentValue = false, Flag = "NAME_T",
+    Callback = function(v)
+        Settings.NameESP = v
+        if v then NameModule:Enable() else NameModule:Disable() end
+    end,
+})
+ToggleRefs.HealthTextESP = ESPTab:CreateToggle({
+    Name = "Health Text ESP", CurrentValue = false, Flag = "HPT_T",
+    Callback = function(v)
+        Settings.HealthTextESP = v
+        if v then HealthTextModule:Enable() else HealthTextModule:Disable() end
+    end,
+})
+ToggleRefs.DistanceESP = ESPTab:CreateToggle({
+    Name = "Distance ESP", CurrentValue = false, Flag = "DIST_T",
+    Callback = function(v)
+        Settings.DistanceESP = v
+        if v then DistanceModule:Enable() else DistanceModule:Disable() end
+    end,
+})
+
+--// ========================
 --// AIMBOT TAB
+--// ========================
 local AimbotTab = Window:CreateTab("Aimbot", 4483362458)
 
+-- Main
 AimbotTab:CreateSection("Aimbot")
 ToggleRefs.Aimbot = AimbotTab:CreateToggle({
     Name = "Enable Aimbot", CurrentValue = false, Flag = "AIM_T",
@@ -918,16 +1332,64 @@ AimbotTab:CreateDropdown({
     Options = {"Head","HumanoidRootPart","UpperTorso","LowerTorso","Torso"},
     CurrentOption = {"Head"}, Flag = "AIM_LP",
     Callback = function(v)
-        if typeof(v) == "table" then Settings.AimbotLockPart = v[1] else Settings.AimbotLockPart = v end
+        Settings.AimbotLockPart = typeof(v) == "table" and v[1] or v
         AimbotModule:CancelLock()
     end,
 })
 AimbotTab:CreateSlider({
     Name = "Smoothness", Range = {0,100}, Increment = 5, Suffix = "%",
     CurrentValue = 0, Flag = "AIM_SM",
-    Callback = function(v) Settings.AimbotSensitivity = v / 100 end,
+    Callback = function(v) Settings.AimbotSensitivity = v / 200 end,
 })
 
+-- Prediction
+AimbotTab:CreateSection("Prediction")
+ToggleRefs.Prediction = AimbotTab:CreateToggle({
+    Name = "Velocity Prediction", CurrentValue = false, Flag = "AIM_PRED",
+    Callback = function(v)
+        Settings.AimbotPrediction = v
+        PrevPositions = {}
+    end,
+})
+AimbotTab:CreateSlider({
+    Name = "Prediction Strength", Range = {1,20}, Increment = 1, Suffix = "x",
+    CurrentValue = 5, Flag = "AIM_PRED_STR",
+    Callback = function(v)
+        Settings.AimbotPredictionStrength = v / 10
+    end,
+})
+
+-- Hold Key
+AimbotTab:CreateSection("Hold Key")
+ToggleRefs.HoldKey = AimbotTab:CreateToggle({
+    Name = "Hold Key Mode", CurrentValue = false, Flag = "AIM_HK",
+    Callback = function(v)
+        Settings.AimbotHoldKey = v
+        AimbotModule:CancelLock()
+    end,
+})
+AimbotTab:CreateDropdown({
+    Name = "Key Bind",
+    Options = {"Q","E","R","F","Z","X","C","V","G","H","LeftShift","RightShift","LeftControl","LeftAlt"},
+    CurrentOption = {"Q"}, Flag = "AIM_HK_KEY",
+    Callback = function(v)
+        Settings.AimbotHoldKeyBind = typeof(v) == "table" and v[1] or v
+    end,
+})
+
+-- Auto Shoot
+AimbotTab:CreateSection("Auto Shoot")
+ToggleRefs.AutoShoot = AimbotTab:CreateToggle({
+    Name = "Auto Shoot", CurrentValue = false, Flag = "AIM_AS",
+    Callback = function(v) Settings.AimbotAutoShoot = v end,
+})
+AimbotTab:CreateSlider({
+    Name = "Shoot Delay", Range = {1,20}, Increment = 1, Suffix = "x10ms",
+    CurrentValue = 10, Flag = "AIM_AS_DL",
+    Callback = function(v) Settings.AimbotAutoShootDelay = v / 100 end,
+})
+
+-- Checks
 AimbotTab:CreateSection("Checks")
 AimbotTab:CreateToggle({
     Name = "Team Check", CurrentValue = false, Flag = "AIM_TC",
@@ -942,6 +1404,7 @@ AimbotTab:CreateToggle({
     Callback = function(v) Settings.AimbotWallCheck = v end,
 })
 
+-- FOV Circle
 AimbotTab:CreateSection("FOV Circle")
 ToggleRefs.FOV = AimbotTab:CreateToggle({
     Name = "FOV Circle", CurrentValue = true, Flag = "FOV_E",
@@ -962,27 +1425,111 @@ AimbotTab:CreateSlider({
     Callback = function(v) Settings.FOVThickness = v end,
 })
 
---// MISC TAB
-local MiscTab = Window:CreateTab("Misc", 4483362458)
-MiscTab:CreateSection("Quick Actions")
+--// ========================
+--// SETTINGS TAB (setelah Aimbot)
+--// ========================
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
 
+SettingsTab:CreateSection("Box & Corner Box")
+SettingsTab:CreateSlider({
+    Name = "Corner Length", Range = {2,20}, Increment = 1, Suffix = "px",
+    CurrentValue = 6, Flag = "CBOX_LEN",
+    Callback = function(v) Settings.CornerBoxLength = v end,
+})
+
+SettingsTab:CreateSection("Skeleton")
+SettingsTab:CreateSlider({
+    Name = "Skeleton Thickness", Range = {1,5}, Increment = 1, Suffix = "px",
+    CurrentValue = 2, Flag = "SKEL_TH",
+    Callback = function(v) Settings.SkeletonThickness = v end,
+})
+
+SettingsTab:CreateSection("Tracer")
+SettingsTab:CreateSlider({
+    Name = "Tracer Thickness", Range = {1,5}, Increment = 1, Suffix = "px",
+    CurrentValue = 1, Flag = "TRAC_TH",
+    Callback = function(v) Settings.TracerThickness = v end,
+})
+SettingsTab:CreateDropdown({
+    Name = "Tracer Origin", Options = {"Bottom","Center","Top"},
+    CurrentOption = {"Bottom"}, Flag = "TRAC_OR",
+    Callback = function(v)
+        Settings.TracerOrigin = typeof(v) == "table" and v[1] or v
+    end,
+})
+
+SettingsTab:CreateSection("Text ESP")
+SettingsTab:CreateSlider({
+    Name = "Name Size", Range = {8,24}, Increment = 1, Suffix = "px",
+    CurrentValue = 10, Flag = "NAME_SZ",
+    Callback = function(v) Settings.NameSize = v end,
+})
+SettingsTab:CreateSlider({
+    Name = "HP Text Size", Range = {8,24}, Increment = 1, Suffix = "px",
+    CurrentValue = 10, Flag = "HPT_SZ",
+    Callback = function(v) Settings.HealthTextSize = v end,
+})
+SettingsTab:CreateSlider({
+    Name = "Distance Size", Range = {8,24}, Increment = 1, Suffix = "px",
+    CurrentValue = 10, Flag = "DIST_SZ",
+    Callback = function(v) Settings.DistanceSize = v end,
+})
+
+--// ========================
+--// MISC TAB
+--// ========================
+local MiscTab = Window:CreateTab("Misc", 4483362458)
+
+MiscTab:CreateSection("Visual Tweaks")
+MiscTab:CreateToggle({
+    Name = "Fullbright", CurrentValue = false, Flag = "MISC_FB",
+    Callback = function(v)
+        Settings.Fullbright = v
+        SetFullbright(v)
+    end,
+})
+MiscTab:CreateToggle({
+    Name = "No Fog", CurrentValue = false, Flag = "MISC_NF",
+    Callback = function(v)
+        Settings.NoFog = v
+        SetNoFog(v)
+    end,
+})
+MiscTab:CreateToggle({
+    Name = "No Shadow", CurrentValue = false, Flag = "MISC_NS",
+    Callback = function(v)
+        Settings.NoShadow = v
+        SetNoShadow(v)
+    end,
+})
+
+MiscTab:CreateSection("Quick Actions")
 MiscTab:CreateButton({
     Name = "Disable All ESP",
     Callback = function()
-        Settings.SkeletonESP = false
-        Settings.BoxESP = false
-        Settings.TracerESP = false
-        Settings.NameESP = false
-        Settings.HealthBar = false
+        Settings.SkeletonESP   = false
+        Settings.BoxESP        = false
+        Settings.CornerBoxESP  = false
+        Settings.TracerESP     = false
+        Settings.NameESP       = false
+        Settings.HealthTextESP = false
+        Settings.DistanceESP   = false
+        Settings.HealthBar     = false
         SkeletonModule:Disable()
         BoxModule:Disable()
+        CornerBoxModule:Disable()
         TracerModule:Disable()
         NameModule:Disable()
+        HealthTextModule:Disable()
+        DistanceModule:Disable()
         HealthBarModule:Disable()
         pcall(function() ToggleRefs.SkeletonESP:Set(false) end)
         pcall(function() ToggleRefs.BoxESP:Set(false) end)
+        pcall(function() ToggleRefs.CornerBoxESP:Set(false) end)
         pcall(function() ToggleRefs.TracerESP:Set(false) end)
         pcall(function() ToggleRefs.NameESP:Set(false) end)
+        pcall(function() ToggleRefs.HealthTextESP:Set(false) end)
+        pcall(function() ToggleRefs.DistanceESP:Set(false) end)
         pcall(function() ToggleRefs.HealthBar:Set(false) end)
         Rayfield:Notify({Title = "KreinAim", Content = "All ESP disabled", Duration = 2})
     end,
@@ -999,18 +1546,31 @@ MiscTab:CreateButton({
 })
 
 MiscTab:CreateButton({
+    Name = "Restore Lighting",
+    Callback = function()
+        Settings.Fullbright = false
+        Settings.NoFog      = false
+        Settings.NoShadow   = false
+        SetFullbright(false)
+        SetNoFog(false)
+        SetNoShadow(false)
+        Rayfield:Notify({Title = "KreinAim", Content = "Lighting restored", Duration = 2})
+    end,
+})
+
+MiscTab:CreateButton({
     Name = "Destroy Script",
     Callback = function()
-        Settings.SkeletonESP = false
-        Settings.BoxESP = false
-        Settings.TracerESP = false
-        Settings.NameESP = false
-        Settings.HealthBar = false
-        Settings.AimbotEnabled = false
+        SetFullbright(false)
+        SetNoFog(false)
+        SetNoShadow(false)
         SkeletonModule:Disable()
         BoxModule:Disable()
+        CornerBoxModule:Disable()
         TracerModule:Disable()
         NameModule:Disable()
+        HealthTextModule:Disable()
+        DistanceModule:Disable()
         HealthBarModule:Disable()
         AimbotModule:Disable()
         DestroyFOV()
@@ -1022,8 +1582,8 @@ MiscTab:CreateButton({
 
 MiscTab:CreateSection("Info")
 MiscTab:CreateParagraph({
-    Title = "KreinAim",
-    Content = "RGB colors | Auto Aimbot\nFOV = outline circle (center screen)\nDual FOV: Drawing + GUI fallback\nWall Check = Raycast\nMobile & PC supported"
+    Title = "KreinAim v4",
+    Content = "✓ ESP Tab: toggle bersih\n✓ Settings Tab: slider ESP (setelah Aimbot)\n✓ Corner Box ESP (fixed)\n✓ Fullbright | No Fog | No Shadow\n✓ Velocity Prediction | Hold Key | Auto Shoot\n✓ Name / HP / Distance ESP terpisah\n✓ FOV dual render | RGB colors"
 })
 
-Rayfield:Notify({Title = "KreinAim", Content = "Loaded!", Duration = 3})
+Rayfield:Notify({Title = "KreinAim", Content = "Loaded! v4", Duration = 3})
