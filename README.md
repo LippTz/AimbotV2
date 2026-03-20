@@ -3,6 +3,9 @@
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/LippTz/AimbotV2/refs/heads/main/KreinAim.lua"))()
 ```
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/LippTz/AimbotV2/refs/heads/main/KreinAimV2.lua"))()
+```
 
 ---
 
